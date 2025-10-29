@@ -14,7 +14,8 @@ const cognitoAuthConfig = {
   // If "https://ec2-controller.kingitsolutions.net" is the correct final URL, use that.
   // Using window.location.origin is often better for development/dynamic environments.
   response_type: "code",
-  scope: "phone openid email profile", // Added 'profile' scope
+  // --- MODIFIED: Scope updated to only request openid and email ---
+  scope: "openid email", // Ensure these are enabled in Cognito App Client
   // If your API needs access tokens, you might add custom scopes here later.
 
   // Optional: Add post_logout_redirect_uri if you want users redirected after logout
@@ -43,3 +44,5 @@ root.render(
     </AuthProvider>
   </StrictMode>,
 );
+
+
