@@ -1,13 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import { useAuth } from 'react-oidc-context'; // Import useAuth hook
 import './App.css';
 
 // Your API Gateway Invoke URL
 const API_URL = "https://fp39v1gzh6.execute-api.us-east-1.amazonaws.com/api";
 
-// --- NEW: Cooldown time as requested ---
-const COOLDOWN_MS = 300000; // 5 minutes
+// Cooldown time in milliseconds (5 minutes)
+const COOLDOWN_MS = 300000;
 
+// Interface defining the structure of instance information
 interface InstanceInfo {
   accountId: string;
   accountName: string;
@@ -19,96 +21,138 @@ interface InstanceInfo {
   env: string;
 }
 
-function App() {
+// --- NEW: Separate component for the EC2 Instance Management UI ---
+// This makes the main App component cleaner and focused on auth state
+function InstanceManager() {
+  const auth = useAuth(); // Get auth context again if needed (e.g., for token)
   const [instances, setInstances] = useState<InstanceInfo[]>([]);
-  // --- FIX: Renamed 'loading' to 'isInitialLoading' ---
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
-  // --- NEW: This array will hold the IDs of instances in "cooldown" ---
   const [cooldownInstances, setCooldownInstances] = useState<string[]>([]);
 
-  // Function to fetch all instances
-  const fetchInstances = async () => {
-    // --- FIX: We no longer set a "loading" state here ---
-    // This stops the table from disappearing on refresh.
+  // --- MODIFIED: Use useCallback to memoize fetchInstances ---
+  // Prevents recreation on every render unless dependencies change (auth token)
+  const fetchInstances = useCallback(async () => {
     setError(null);
+    if (!auth.user?.id_token) {
+        setError("Authentication token not available.");
+        setIsInitialLoading(false);
+        return; // Don't fetch if no token
+    }
+
     try {
-      const response = await axios.post(API_URL, {
-        action: "listInstances"
-      });
-      const sortedData = response.data.sort((a: InstanceInfo, b: InstanceInfo) => 
+      const response = await axios.post(
+        API_URL,
+        { action: "listInstances" },
+        { // --- NEW: Add Authorization header ---
+          headers: {
+            Authorization: `Bearer ${auth.user.id_token}`,
+          },
+        }
+      );
+      const sortedData = response.data.sort((a: InstanceInfo, b: InstanceInfo) =>
         a.name.localeCompare(b.name)
       );
       setInstances(sortedData);
     } catch (err) {
-      console.error(err);
-      setError("Failed to fetch instances. Check console for details.");
+      console.error("Fetch instances error:", err);
+      // Check if it's an Axios error and provide more detail
+      if (axios.isAxiosError(err)) {
+        setError(`Failed to fetch instances: ${err.response?.statusText || err.message}. Check console.`);
+      } else {
+        setError("Failed to fetch instances. Check console for details.");
+      }
     } finally {
-      // This will set loading to false *only* after the first load
       setIsInitialLoading(false);
     }
-  };
+  // --- DEPENDENCY: Include auth.user?.id_token in dependency array ---
+  }, [auth.user?.id_token]);
 
-  // Run fetchInstances() once when the component loads
+
+  // Run fetchInstances when the component mounts and when the token changes
   useEffect(() => {
     fetchInstances();
-  }, []);
+  }, [fetchInstances]); // fetchInstances is memoized
 
-  // Function to handle Start/Stop button clicks
-  const handleInstanceAction = async (
+  // --- MODIFIED: Use useCallback for handleInstanceAction ---
+  const handleInstanceAction = useCallback(async (
     instanceId: string,
     accountId: string,
     region: string,
     action: "startInstance" | "stopInstance"
   ) => {
-    // 1. Immediately add instance to cooldown list to disable buttons
+    if (!auth.user?.id_token) {
+      setError("Authentication token not available for action.");
+      return; // Don't perform action if no token
+    }
+
     setCooldownInstances(prev => [...prev, instanceId]);
     setError(null);
-    
+
     try {
-      // 2. Make the API call to start/stop the instance
-      await axios.post(API_URL, {
-        action: action,
-        instanceId: instanceId,
-        accountId: accountId,
-        region: region
-      });
-      
-      // 3. Set a 5-minute timer
+      await axios.post(
+        API_URL,
+        {
+          action: action,
+          instanceId: instanceId,
+          accountId: accountId,
+          region: region,
+        },
+        { // --- NEW: Add Authorization header ---
+          headers: {
+            Authorization: `Bearer ${auth.user.id_token}`,
+          },
+        }
+      );
+
+      // Refresh list immediately after successful action *request*
+      // (The actual instance state change might take time)
+      fetchInstances();
+
       setTimeout(() => {
-        // 4. After 5 minutes, remove the instance from cooldown
         setCooldownInstances(prev => prev.filter(id => id !== instanceId));
-        // 5. And refresh the instance list
-        fetchInstances();
+        // Optional: Could refresh again here if needed, but the first refresh should catch the state change eventually
+        // fetchInstances();
       }, COOLDOWN_MS);
 
     } catch (err) {
-      console.error(err);
-      setError(`Failed to ${action}. Check console.`);
-      // If the API call *itself* fails, remove from cooldown immediately
+      console.error(`${action} error:`, err);
+      if (axios.isAxiosError(err)) {
+          setError(`Failed to ${action}: ${err.response?.statusText || err.message}. Check console.`);
+      } else {
+        setError(`Failed to ${action}. Check console.`);
+      }
       setCooldownInstances(prev => prev.filter(id => id !== instanceId));
     }
-  };
+  // --- DEPENDENCIES: Include auth.user?.id_token and fetchInstances ---
+  }, [auth.user?.id_token, fetchInstances]);
 
   // Helper to check if an instance is in cooldown
   const isInstanceInCooldown = (instanceId: string) => {
     return cooldownInstances.includes(instanceId);
   };
 
+  // Render the Instance Manager UI
   return (
     <>
       <h1>AWS EC2 Self-Service Portal</h1>
-      <button onClick={fetchInstances} disabled={cooldownInstances.length > 0} className="btn-refresh">
-        {cooldownInstances.length > 0 ? 'Working...' : 'Refresh List'}
+       {/* --- NEW: Display User Email --- */}
+       <div className="text-center mb-4 text-gray-600">
+         Logged in as: {auth.user?.profile?.email}
+       </div>
+      <button
+        onClick={fetchInstances}
+        // Disable refresh if any instance is cooling down OR if currently loading
+        disabled={cooldownInstances.length > 0 || isInitialLoading}
+        className="btn-refresh"
+      >
+        {isInitialLoading ? 'Loading...' : cooldownInstances.length > 0 ? 'Working...' : 'Refresh List'}
       </button>
 
-      {/* --- FIX: This now only shows on the *very first* load --- */}
       {isInitialLoading && <p className="loading-text">Loading instances...</p>}
-      {error && <p className="loading-text" style={{ color: 'red' }}>{error}</p>}
-      
-      {/* --- FIX: The table now *always* shows after the first load --- */}
-      {!isInitialLoading && !error && (
+      {error && <p className="loading-text" style={{ color: 'red' }}>Error: {error}</p>}
+
+      {!isInitialLoading && !error && instances.length > 0 && (
         <table>
           <thead>
             <tr>
@@ -135,7 +179,6 @@ function App() {
                 <td>
                   <button
                     className="btn-start"
-                    // Disable if state is not 'stopped' OR if it's in cooldown
                     disabled={instance.state !== 'stopped' || isInstanceInCooldown(instance.instanceId)}
                     onClick={() => handleInstanceAction(instance.instanceId, instance.accountId, instance.region, 'startInstance')}
                   >
@@ -143,7 +186,6 @@ function App() {
                   </button>
                   <button
                     className="btn-stop"
-                    // Disable if state is not 'running' OR if it's in cooldown
                     disabled={instance.state !== 'running' || isInstanceInCooldown(instance.instanceId)}
                     onClick={() => handleInstanceAction(instance.instanceId, instance.accountId, instance.region, 'stopInstance')}
                   >
@@ -155,7 +197,69 @@ function App() {
           </tbody>
         </table>
       )}
+       {!isInitialLoading && !error && instances.length === 0 && (
+           <p className="loading-text">No instances found or you may not have permission to view them.</p>
+       )}
     </>
+  );
+}
+
+
+// --- Main App component now handles authentication state ---
+function App() {
+  const auth = useAuth(); // Get authentication status and methods
+
+  // --- Handle Auth Loading State ---
+  if (auth.isLoading) {
+    return <div className="loading-text">Loading authentication...</div>;
+  }
+
+  // --- Handle Auth Error State ---
+  if (auth.error) {
+    return <div className="loading-text" style={{color: 'red'}}>Authentication Error: {auth.error.message}</div>;
+  }
+
+  // --- Handle Authenticated State ---
+  if (auth.isAuthenticated) {
+    return (
+      <div className="container mx-auto p-4">
+        {/* Render the Instance Manager component */}
+        <InstanceManager />
+
+        {/* Sign Out Button */}
+        <div className="mt-6 text-center">
+            {/* Use signoutRedirect for standard OIDC logout */}
+             <button
+                className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition duration-200"
+                onClick={() => auth.signoutRedirect()} // Use standard OIDC signout
+                >
+                Sign out
+            </button>
+            {/* Display token info - useful for debugging, remove for production */}
+             <details className="mt-4 text-left text-xs text-gray-500 bg-gray-100 p-2 rounded">
+                 <summary>Token Information (Debug)</summary>
+                 <pre className="whitespace-pre-wrap break-all">ID Token: {auth.user?.id_token}</pre>
+                 {/* <pre className="whitespace-pre-wrap break-all">Access Token: {auth.user?.access_token}</pre> */}
+                 {/* <pre className="whitespace-pre-wrap break-all">Refresh Token: {auth.user?.refresh_token}</pre> */}
+             </details>
+        </div>
+      </div>
+    );
+  }
+
+  // --- Handle Unauthenticated State ---
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100">
+       <h1 className="text-2xl font-bold mb-6">AWS EC2 Self-Service Portal</h1>
+      <p className="mb-4">Please sign in to manage your instances.</p>
+      <button
+        className="px-6 py-3 bg-blue-600 text-white rounded hover:bg-blue-700 transition duration-200"
+        onClick={() => auth.signinRedirect()} // Initiate sign-in flow
+      >
+        Sign in with Cognito
+      </button>
+       {/* Note: The custom signOutRedirect is removed as auth.signoutRedirect is generally preferred */}
+    </div>
   );
 }
 
