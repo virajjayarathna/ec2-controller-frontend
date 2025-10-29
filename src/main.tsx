@@ -1,7 +1,8 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-// --- MODIFIED: Import User type ---
-import { AuthProvider, User } from 'react-oidc-context'; // Import AuthProvider and User
+// --- MODIFIED: Import User type directly from oidc-client-ts ---
+import { AuthProvider } from 'react-oidc-context'; // Import AuthProvider
+import type { User } from 'oidc-client-ts'; // Import User type
 import './index.css';
 import App from './App.tsx';
 
@@ -27,6 +28,7 @@ const cognitoAuthConfig = {
   // Optional: Event listeners for debugging or other actions
   // This callback cleans the URL after the OIDC parameters are processed.
   onSigninCallback: (_user: User | void): void => {
+    // Note: The User type is now correctly imported from oidc-client-ts
     window.history.replaceState({}, document.title, window.location.pathname);
   },
 };
