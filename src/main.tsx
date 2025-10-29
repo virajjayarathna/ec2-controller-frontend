@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AuthProvider } from 'react-oidc-context'; // Import AuthProvider
+// --- MODIFIED: Import User type ---
+import { AuthProvider, User } from 'react-oidc-context'; // Import AuthProvider and User
 import './index.css';
 import App from './App.tsx';
 
@@ -18,13 +19,16 @@ const cognitoAuthConfig = {
   scope: "openid email", // Ensure these are enabled in Cognito App Client
   // If your API needs access tokens, you might add custom scopes here later.
 
+  // --- MODIFIED: Uncommented and set post_logout_redirect_uri ---
   // Optional: Add post_logout_redirect_uri if you want users redirected after logout
-  // post_logout_redirect_uri: window.location.origin,
+  post_logout_redirect_uri: window.location.origin,
 
+  // --- MODIFIED: Added onSigninCallback ---
   // Optional: Event listeners for debugging or other actions
-  // onSigninCallback: (_user: User | void): void => {
-  //   window.history.replaceState({}, document.title, window.location.pathname);
-  // },
+  // This callback cleans the URL after the OIDC parameters are processed.
+  onSigninCallback: (_user: User | void): void => {
+    window.history.replaceState({}, document.title, window.location.pathname);
+  },
 };
 
 // Get the root element from the DOM
@@ -44,5 +48,4 @@ root.render(
     </AuthProvider>
   </StrictMode>,
 );
-
 
