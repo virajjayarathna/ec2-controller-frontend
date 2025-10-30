@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import './App.css';
+import { useAuth } from 'react-oidc-context'; // <-- ADDED
 
 // Your API Gateway Invoke URL
 const API_URL = "https://fp39v1gzh6.execute-api.us-east-1.amazonaws.com/api";
@@ -20,24 +21,31 @@ interface InstanceInfo {
 }
 
 function App() {
+  // --- ADDED: Auth logic from snippet ---
+  const auth = useAuth();
+
+  const signOutRedirect = () => {
+    const clientId = "4dvl10ougak8vdakaj9e2cn3t3";
+    const logoutUri = "https://ec2-controller.kingitsolutions.net";
+    const cognitoDomain = "https://us-east-1werhejlit.auth.us-east-1.amazoncognito.com";
+    window.location.href = `${cognitoDomain}/logout?client_id=${clientId}&logout_uri=${encodeURIComponent(logoutUri)}`;
+  };
+  // ------------------------------------
+
+  // --- EXISTING: State for your EC2 portal ---
   const [instances, setInstances] = useState<InstanceInfo[]>([]);
-  // --- FIX: Renamed 'loading' to 'isInitialLoading' ---
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
-  // --- NEW: This array will hold the IDs of instances in "cooldown" ---
   const [cooldownInstances, setCooldownInstances] = useState<string[]>([]);
 
-  // Function to fetch all instances
+  // --- EXISTING: Function to fetch all instances ---
   const fetchInstances = async () => {
-    // --- FIX: We no longer set a "loading" state here ---
-    // This stops the table from disappearing on refresh.
     setError(null);
     try {
       const response = await axios.post(API_URL, {
         action: "listInstances"
       });
-      const sortedData = response.data.sort((a: InstanceInfo, b: InstanceInfo) => 
+      const sortedData = response.data.sort((a: InstanceInfo, b: InstanceInfo) =>
         a.name.localeCompare(b.name)
       );
       setInstances(sortedData);
@@ -45,29 +53,30 @@ function App() {
       console.error(err);
       setError("Failed to fetch instances. Check console for details.");
     } finally {
-      // This will set loading to false *only* after the first load
       setIsInitialLoading(false);
     }
   };
 
-  // Run fetchInstances() once when the component loads
+  // --- MODIFIED: This now only runs when authenticated ---
   useEffect(() => {
-    fetchInstances();
-  }, []);
+    if (auth.isAuthenticated) {
+      fetchInstances();
+    }
+    // We add auth.isAuthenticated as a dependency.
+    // This will trigger fetchInstances() once auth is ready.
+  }, [auth.isAuthenticated]);
 
-  // Function to handle Start/Stop button clicks
+  // --- EXISTING: Function to handle Start/Stop button clicks ---
   const handleInstanceAction = async (
     instanceId: string,
     accountId: string,
     region: string,
     action: "startInstance" | "stopInstance"
   ) => {
-    // 1. Immediately add instance to cooldown list to disable buttons
     setCooldownInstances(prev => [...prev, instanceId]);
     setError(null);
     
     try {
-      // 2. Make the API call to start/stop the instance
       await axios.post(API_URL, {
         action: action,
         instanceId: instanceId,
@@ -75,87 +84,113 @@ function App() {
         region: region
       });
       
-      // 3. Set a 5-minute timer
       setTimeout(() => {
-        // 4. After 5 minutes, remove the instance from cooldown
         setCooldownInstances(prev => prev.filter(id => id !== instanceId));
-        // 5. And refresh the instance list
         fetchInstances();
       }, COOLDOWN_MS);
 
     } catch (err) {
       console.error(err);
       setError(`Failed to ${action}. Check console.`);
-      // If the API call *itself* fails, remove from cooldown immediately
       setCooldownInstances(prev => prev.filter(id => id !== instanceId));
     }
   };
 
-  // Helper to check if an instance is in cooldown
+  // --- EXISTING: Helper to check if an instance is in cooldown ---
   const isInstanceInCooldown = (instanceId: string) => {
     return cooldownInstances.includes(instanceId);
   };
 
-  return (
-    <>
-      <h1>AWS EC2 Self-Service Portal</h1>
-      <button onClick={fetchInstances} disabled={cooldownInstances.length > 0} className="btn-refresh">
-        {cooldownInstances.length > 0 ? 'Working...' : 'Refresh List'}
-      </button>
+  // --- ADDED: Auth loading state ---
+  if (auth.isLoading) {
+    return <div className="loading-text">Loading authentication...</div>;
+  }
 
-      {/* --- FIX: This now only shows on the *very first* load --- */}
-      {isInitialLoading && <p className="loading-text">Loading instances...</p>}
-      {error && <p className="loading-text" style={{ color: 'red' }}>{error}</p>}
-      
-      {/* --- FIX: The table now *always* shows after the first load --- */}
-      {!isInitialLoading && !error && (
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Status</th>
-              <th>Instance ID</th>
-              <th>Type</th>
-              <th>Account</th>
-              <th>Env Tag</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {instances.map((instance) => (
-              <tr key={instance.instanceId}>
-                <td>{instance.name}</td>
-                <td>
-                  <span className={`state-${instance.state}`}>{instance.state}</span>
-                </td>
-                <td>{instance.instanceId}</td>
-                <td>{instance.instanceType}</td>
-                <td>{instance.accountName} ({instance.accountId})</td>
-                <td>{instance.env}</td>
-                <td>
-                  <button
-                    className="btn-start"
-                    // Disable if state is not 'stopped' OR if it's in cooldown
-                    disabled={instance.state !== 'stopped' || isInstanceInCooldown(instance.instanceId)}
-                    onClick={() => handleInstanceAction(instance.instanceId, instance.accountId, instance.region, 'startInstance')}
-                  >
-                    Start
-                  </button>
-                  <button
-                    className="btn-stop"
-                    // Disable if state is not 'running' OR if it's in cooldown
-                    disabled={instance.state !== 'running' || isInstanceInCooldown(instance.instanceId)}
-                    onClick={() => handleInstanceAction(instance.instanceId, instance.accountId, instance.region, 'stopInstance')}
-                  >
-                    Stop
-                  </button>
-                </td>
+  // --- ADDED: Auth error state ---
+  if (auth.error) {
+    return <div className="loading-text" style={{ color: 'red' }}>Authentication Error: {auth.error.message}</div>;
+  }
+
+  // --- ADDED: Auth authenticated state ---
+  // This wraps your entire existing portal UI
+  if (auth.isAuthenticated) {
+    return (
+      <>
+        {/* --- ADDED: Auth header with user info and logout button --- */}
+        <div className="auth-header">
+          <span>Hello, {auth.user?.profile.email}</span>
+          <button onClick={() => signOutRedirect()} className="btn-logout">
+            Sign Out
+          </button>
+        </div>
+        {/* -------------------------------------------------------- */}
+
+        <h1>AWS EC2 Self-Service Portal</h1>
+        <button onClick={fetchInstances} disabled={cooldownInstances.length > 0} className="btn-refresh">
+          {cooldownInstances.length > 0 ? 'Working...' : 'Refresh List'}
+        </button>
+
+        {isInitialLoading && <p className="loading-text">Loading instances...</p>}
+        {error && <p className="loading-text" style={{ color: 'red' }}>{error}</p>}
+        
+        {!isInitialLoading && !error && (
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Instance ID</th>
+                <th>Type</th>
+                <th>Account</th>
+                <th>Env Tag</th>
+                <th>Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </>
+            </thead>
+            <tbody>
+              {instances.map((instance) => (
+                <tr key={instance.instanceId}>
+                  <td>{instance.name}</td>
+                  <td>
+                    <span className={`state-${instance.state}`}>{instance.state}</span>
+                  </td>
+                  <td>{instance.instanceId}</td>
+                  <td>{instance.instanceType}</td>
+                  <td>{instance.accountName} ({instance.accountId})</td>
+                  <td>{instance.env}</td>
+                  <td>
+                    <button
+                      className="btn-start"
+                      disabled={instance.state !== 'stopped' || isInstanceInCooldown(instance.instanceId)}
+                      onClick={() => handleInstanceAction(instance.instanceId, instance.accountId, instance.region, 'startInstance')}
+                    >
+                      Start
+                    </button>
+                    <button
+                      className="btn-stop"
+                      disabled={instance.state !== 'running' || isInstanceInCooldown(instance.instanceId)}
+                      onClick={() => handleInstanceAction(instance.instanceId, instance.accountId, instance.region, 'stopInstance')}
+                    >
+                      Stop
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </>
+    );
+  }
+
+  // --- ADDED: Auth unauthenticated state (Sign in button) ---
+  return (
+    <div className="login-container">
+      <h1>EC2 Self-Service Portal</h1>
+      <p>Please sign in to continue.</p>
+      <button onClick={() => auth.signinRedirect()} className="btn-login">
+        Sign In
+      </button>
+    </div>
   );
 }
 
