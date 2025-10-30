@@ -24,7 +24,13 @@ function App() {
   // --- ADDED: Auth logic from snippet ---
   const auth = useAuth();
 
-  const signOutRedirect = () => {
+const signOutRedirect = () => {
+    // --- THIS IS THE FIX ---
+    // 1. Clear the user from the local app's storage
+    auth.removeUser(); 
+    // ----------------------
+
+    // 2. Redirect to Cognito to log out from the "master" session
     const clientId = "4dvl10ougak8vdakaj9e2cn3t3";
     const logoutUri = "https://ec2-controller.kingitsolutions.net";
     const cognitoDomain = "https://us-east-1werhejlit.auth.us-east-1.amazoncognito.com";
