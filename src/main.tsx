@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { AuthProvider } from 'react-oidc-context'
-import type { User } from 'oidc-client-ts'; // <-- 1. IMPORT THIS TYPE
+import type { User } from 'oidc-client-ts';
 
 // --- ADDED: Cognito Config ---
 const cognitoAuthConfig = {
@@ -13,10 +13,9 @@ const cognitoAuthConfig = {
   response_type: "code",
   scope: "email openid phone",
 
-  // --- 2. THIS IS THE FIX ---
-  // This callback runs after a successful sign-in
-  // and removes the query parameters from the URL.
-  onSigninCallback: (user: User | void) => {
+  // --- THIS IS THE FIX ---
+  // Changed 'user' to '_user' to fix TS6133 (noUnusedParameters)
+  onSigninCallback: (_user: User | void) => {
     window.history.replaceState(null, "", window.location.pathname);
   },
   // -------------------------
@@ -25,7 +24,6 @@ const cognitoAuthConfig = {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {/* --- MODIFIED: Wrapped App with AuthProvider --- */}
     <AuthProvider {...cognitoAuthConfig}>
       <App />
     </AuthProvider>
