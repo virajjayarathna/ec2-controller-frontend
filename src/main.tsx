@@ -2,7 +2,8 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
-import { AuthProvider } from 'react-oidc-context' // <-- ADDED
+import { AuthProvider } from 'react-oidc-context'
+import type { User } from 'oidc-client-ts'; // <-- 1. IMPORT THIS TYPE
 
 // --- ADDED: Cognito Config ---
 const cognitoAuthConfig = {
@@ -11,6 +12,14 @@ const cognitoAuthConfig = {
   redirect_uri: "https://ec2-controller.kingitsolutions.net",
   response_type: "code",
   scope: "email openid phone",
+
+  // --- 2. THIS IS THE FIX ---
+  // This callback runs after a successful sign-in
+  // and removes the query parameters from the URL.
+  onSigninCallback: (user: User | void) => {
+    window.history.replaceState(null, "", window.location.pathname);
+  },
+  // -------------------------
 };
 // -----------------------------
 
